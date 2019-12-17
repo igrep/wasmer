@@ -227,6 +227,7 @@ impl Default for MemoryBoundCheckMode {
 pub struct Features {
     pub simd: bool,
     pub threads: bool,
+    pub multi_value: bool,
 }
 
 /// Use this to point to a compiler config struct provided by the backend.

@@ -154,7 +154,7 @@ pub fn validate_and_report_errors_with_features(
         operator_config: wasmparser::OperatorValidatorConfig {
             enable_simd: features.simd,
             enable_bulk_memory: false,
-            enable_multi_value: false,
+            enable_multi_value: features.multi_value,
             enable_reference_types: false,
             enable_threads: features.threads,
 

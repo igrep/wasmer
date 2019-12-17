@@ -185,7 +185,7 @@ pub fn validating_parser_config(features: &Features) -> wasmparser::ValidatingPa
             enable_reference_types: false,
             enable_simd: features.simd,
             enable_bulk_memory: false,
-            enable_multi_value: false,
+            enable_multi_value: features.multi_value,
 
             #[cfg(feature = "deterministic-execution")]
             deterministic_only: true,
