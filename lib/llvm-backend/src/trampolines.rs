@@ -99,20 +99,66 @@ fn generate_trampoline<'ctx>(
 
     let call_site = builder.build_call(func_ptr, &args_vec, "call");
 
-    match func_sig.returns() {
-        &[] => {}
-        &[one_ret] => {
-            let ret_ptr_type = cast_ptr_ty(one_ret);
+    if let Some(basic_value) = call_site.try_as_basic_value().left() {
+        match func_sig.returns().len() {
+            1 => {
+                let ret_ptr_type = cast_ptr_ty(func_sig.returns()[0]);
 
-            let typed_ret_ptr =
-                builder.build_pointer_cast(returns_ptr, ret_ptr_type, "typed_ret_ptr");
-            builder.build_store(
-                typed_ret_ptr,
-                call_site.try_as_basic_value().left().unwrap(),
-            );
-        }
-        _ => {
-            return Err("trampoline function multi-value returns unimplemented".to_string());
+                let typed_ret_ptr =
+                    builder.build_pointer_cast(returns_ptr, ret_ptr_type, "typed_ret_ptr");
+                builder.build_store(typed_ret_ptr, basic_value);
+            }
+            count @ _ => {
+                // This is a multi-value return.
+                let struct_value = basic_value.into_struct_value();
+                let mut idx = 0;
+                for i in 0..(count as u32) {
+                    let value = builder.build_extract_value(struct_value, i, "").unwrap();
+                    let ptr = unsafe {
+                        builder.build_gep(
+                            returns_ptr,
+                            &[intrinsics.i32_ty.const_int(idx, false)],
+                            "",
+                        )
+                    };
+                    match func_sig.returns()[i as usize] {
+                        Type::I32 => {
+                            let value = builder.build_int_z_extend(
+                                value.into_int_value(),
+                                intrinsics.i64_ty,
+                                "",
+                            );
+                            builder.build_store(ptr, value);
+                        }
+                        Type::I64 => {
+                            builder.build_store(ptr, value);
+                        }
+                        Type::F32 => {
+                            let value = builder
+                                .build_bitcast(value.into_float_value(), intrinsics.i32_ty, "")
+                                .into_int_value();
+                            let value = builder.build_int_z_extend(value, intrinsics.i64_ty, "");
+                            builder.build_store(ptr, value);
+                        }
+                        Type::F64 => {
+                            let value = builder.build_bitcast(
+                                value.into_float_value(),
+                                intrinsics.i64_ty,
+                                "",
+                            );
+                            builder.build_store(ptr, value);
+                        }
+                        Type::V128 => {
+                            let ptr = builder
+                                .build_bitcast(ptr, intrinsics.i128_ptr_ty, "")
+                                .into_pointer_value();
+                            builder.build_store(ptr, value);
+                            idx = idx + 1;
+                        }
+                    }
+                    idx = idx + 1;
+                }
+            }
         }
     }
 

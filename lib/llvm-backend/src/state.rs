@@ -18,13 +18,16 @@ pub enum ControlFrame<'ctx> {
         body: BasicBlock,
         next: BasicBlock,
         phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        loop_body_phis: SmallVec<[PhiValue<'ctx>; 1]>,
         stack_size_snapshot: usize,
     },
     IfElse {
         if_then: BasicBlock,
         if_else: BasicBlock,
         next: BasicBlock,
-        phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        then_phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        else_phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        next_phis: SmallVec<[PhiValue<'ctx>; 1]>,
         stack_size_snapshot: usize,
         if_else_state: IfElseState,
     },
@@ -54,9 +57,20 @@ impl<'ctx> ControlFrame<'ctx> {
 
     pub fn phis(&self) -> &[PhiValue<'ctx>] {
         match self {
-            ControlFrame::Block { ref phis, .. }
-            | ControlFrame::Loop { ref phis, .. }
-            | ControlFrame::IfElse { ref phis, .. } => phis.as_slice(),
+            ControlFrame::Block { ref phis, .. } | ControlFrame::Loop { ref phis, .. } => {
+                phis.as_slice()
+            }
+            ControlFrame::IfElse { ref next_phis, .. } => next_phis.as_slice(),
+        }
+    }
+
+    /// PHI nodes for stack values in the loop body.
+    pub fn loop_body_phis(&self) -> &[PhiValue<'ctx>] {
+        match self {
+            ControlFrame::Block { .. } | ControlFrame::IfElse { .. } => &[],
+            ControlFrame::Loop {
+                ref loop_body_phis, ..
+            } => loop_body_phis.as_slice(),
         }
     }
 
@@ -290,6 +304,7 @@ impl<'ctx> State<'ctx> {
     }
 
     pub fn pop1_extra(&mut self) -> Result<(BasicValueEnum<'ctx>, ExtraInfo), BinaryReaderError> {
+        assert!(self.stack.len() > 0);
         self.stack.pop().ok_or(BinaryReaderError {
             message: "pop1_extra: invalid value stack",
             offset: -1isize as usize,
@@ -389,11 +404,13 @@ impl<'ctx> State<'ctx> {
         &mut self,
         body: BasicBlock,
         next: BasicBlock,
+        loop_body_phis: SmallVec<[PhiValue<'ctx>; 1]>,
         phis: SmallVec<[PhiValue<'ctx>; 1]>,
     ) {
         self.control_stack.push(ControlFrame::Loop {
             body,
             next,
+            loop_body_phis,
             phis,
             stack_size_snapshot: self.stack.len(),
         });
@@ -404,13 +421,17 @@ impl<'ctx> State<'ctx> {
         if_then: BasicBlock,
         if_else: BasicBlock,
         next: BasicBlock,
-        phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        then_phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        else_phis: SmallVec<[PhiValue<'ctx>; 1]>,
+        next_phis: SmallVec<[PhiValue<'ctx>; 1]>,
     ) {
         self.control_stack.push(ControlFrame::IfElse {
             if_then,
             if_else,
             next,
-            phis,
+            then_phis,
+            else_phis,
+            next_phis,
             stack_size_snapshot: self.stack.len(),
             if_else_state: IfElseState::If,
         });

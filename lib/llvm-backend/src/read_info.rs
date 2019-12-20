@@ -1,16 +1,26 @@
+use wasmer_runtime_core::module::ModuleInfo;
 use wasmer_runtime_core::parse::wp_type_to_type;
-use wasmer_runtime_core::types::Type;
-use wasmparser::{BinaryReaderError, TypeOrFuncType as WpTypeOrFuncType};
+use wasmer_runtime_core::structures::TypedIndex;
+use wasmer_runtime_core::types::{SigIndex, Type};
+use wasmparser::{Type as WpType, TypeOrFuncType as WpTypeOrFuncType};
 
-pub fn blocktype_to_type(ty: WpTypeOrFuncType) -> Result<Type, BinaryReaderError> {
+pub fn blocktype_to_types(ty: WpTypeOrFuncType, info: &ModuleInfo) -> Vec<Type> {
     match ty {
-        WpTypeOrFuncType::Type(inner_ty) => wp_type_to_type(inner_ty),
-        _ => {
-            return Err(BinaryReaderError {
-                message:
-                    "the wasmer llvm backend does not yet support the multi-value return extension",
-                offset: -1isize as usize,
-            });
+        WpTypeOrFuncType::Type(WpType::EmptyBlockType) => vec![],
+        WpTypeOrFuncType::Type(inner_ty) => vec![wp_type_to_type(inner_ty).unwrap()],
+        WpTypeOrFuncType::FuncType(sig_index) => {
+            let ty = &info.signatures[SigIndex::new(sig_index as usize)];
+            ty.returns().to_vec()
+        }
+    }
+}
+
+pub fn blocktype_to_param_types(ty: WpTypeOrFuncType, info: &ModuleInfo) -> Vec<Type> {
+    match ty {
+        WpTypeOrFuncType::Type(_) => vec![],
+        WpTypeOrFuncType::FuncType(sig_index) => {
+            let ty = &info.signatures[SigIndex::new(sig_index as usize)];
+            ty.params().to_vec()
         }
     }
 }

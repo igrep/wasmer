@@ -1,7 +1,7 @@
 use crate::{
     backend::LLVMBackend,
     intrinsics::{tbaa_label, CtxType, GlobalCache, Intrinsics, MemoryCache},
-    read_info::blocktype_to_type,
+    read_info::{blocktype_to_param_types, blocktype_to_types},
     stackmap::{StackmapEntry, StackmapEntryKind, StackmapRegistry, ValueSemantic},
     state::{ControlFrame, ExtraInfo, IfElseState, State},
     trampolines::generate_trampolines,
@@ -1206,15 +1206,10 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                 let end_block = context.append_basic_block(function, "end");
                 builder.position_at_end(&end_block);
 
-                let phis = if let Ok(wasmer_ty) = blocktype_to_type(ty) {
-                    let llvm_ty = type_to_llvm(intrinsics, wasmer_ty);
-                    [llvm_ty]
-                        .iter()
-                        .map(|&ty| builder.build_phi(ty, &state.var_name()))
-                        .collect()
-                } else {
-                    SmallVec::new()
-                };
+                let phis = blocktype_to_types(ty, info)
+                    .iter()
+                    .map(|&ty| builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name()))
+                    .collect();
 
                 state.push_block(end_block, phis);
                 builder.position_at_end(&current_block);
@@ -1222,21 +1217,28 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
             Operator::Loop { ty } => {
                 let loop_body = context.append_basic_block(function, "loop_body");
                 let loop_next = context.append_basic_block(function, "loop_outer");
+                let pre_loop_block = builder.get_insert_block().unwrap();
 
                 builder.build_unconditional_branch(&loop_body);
-
                 builder.position_at_end(&loop_next);
-                let phis = if let Ok(wasmer_ty) = blocktype_to_type(ty) {
-                    let llvm_ty = type_to_llvm(intrinsics, wasmer_ty);
-                    [llvm_ty]
-                        .iter()
-                        .map(|&ty| builder.build_phi(ty, &state.var_name()))
-                        .collect()
-                } else {
-                    SmallVec::new()
-                };
+                let phis = blocktype_to_types(ty, info)
+                    .iter()
+                    .map(|&ty| builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name()))
+                    .collect();
 
                 builder.position_at_end(&loop_body);
+                let loop_phis: SmallVec<[PhiValue<'ctx>; 1]> = blocktype_to_param_types(ty, info)
+                    .iter()
+                    .map(|&ty| builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name()))
+                    .collect();
+                for phi in loop_phis.iter().rev() {
+                    let (value, info) = state.pop1_extra()?;
+                    let value = apply_pending_canonicalization(builder, intrinsics, value, info);
+                    phi.add_incoming(&[(&value, &pre_loop_block)]);
+                }
+                for phi in &loop_phis {
+                    state.push1(phi.as_basic_value());
+                }
 
                 if self.track_state {
                     if let Some(offset) = opcode_offset {
@@ -1269,7 +1271,7 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     }
                 }
 
-                state.push_loop(loop_body, loop_next, phis);
+                state.push_loop(loop_body, loop_next, loop_phis, phis);
             }
             Operator::Br { relative_depth } => {
                 let frame = state.frame_at_depth(relative_depth)?;
@@ -1279,13 +1281,14 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     offset: -1isize as usize,
                 })?;
 
-                let value_len = if frame.is_loop() {
-                    0
+                let phis = if frame.is_loop() {
+                    frame.loop_body_phis()
                 } else {
-                    frame.phis().len()
+                    frame.phis()
                 };
 
-                let values = state.peekn_extra(value_len)?;
+                let len = phis.len();
+                let values = state.peekn_extra(len)?;
                 let values = values.iter().map(|(v, info)| {
                     apply_pending_canonicalization(builder, intrinsics, *v, *info)
                 });
@@ -1293,13 +1296,13 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                 // For each result of the block we're branching to,
                 // pop a value off the value stack and load it into
                 // the corresponding phi.
-                for (phi, value) in frame.phis().iter().zip(values) {
+                for (phi, value) in phis.iter().zip(values) {
                     phi.add_incoming(&[(&value, &current_block)]);
                 }
 
                 builder.build_unconditional_branch(frame.br_dest());
 
-                state.popn(value_len)?;
+                state.popn(len)?;
                 state.reachable = false;
             }
             Operator::BrIf { relative_depth } => {
@@ -1311,18 +1314,18 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     offset: -1isize as usize,
                 })?;
 
-                let value_len = if frame.is_loop() {
-                    0
+                let phis = if frame.is_loop() {
+                    frame.loop_body_phis()
                 } else {
-                    frame.phis().len()
+                    frame.phis()
                 };
 
-                let param_stack = state.peekn_extra(value_len)?;
+                let param_stack = state.peekn_extra(phis.len())?;
                 let param_stack = param_stack.iter().map(|(v, info)| {
                     apply_pending_canonicalization(builder, intrinsics, *v, *info)
                 });
 
-                for (phi, value) in frame.phis().iter().zip(param_stack) {
+                for (phi, value) in phis.iter().zip(param_stack) {
                     phi.add_incoming(&[(&value, &current_block)]);
                 }
 
@@ -1349,14 +1352,14 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
 
                 let default_frame = state.frame_at_depth(default_depth)?;
 
-                let args = if default_frame.is_loop() {
-                    Vec::new()
+                let phis = if default_frame.is_loop() {
+                    default_frame.loop_body_phis()
                 } else {
-                    let res_len = default_frame.phis().len();
-                    state.peekn(res_len)?
+                    default_frame.phis()
                 };
+                let args = state.peekn(phis.len())?;
 
-                for (phi, value) in default_frame.phis().iter().zip(args.iter()) {
+                for (phi, value) in phis.iter().zip(args.iter()) {
                     phi.add_incoming(&[(value, &current_block)]);
                 }
 
@@ -1398,16 +1401,12 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
 
                 let end_phis = {
                     builder.position_at_end(&end_block);
-
-                    let phis = if let Ok(wasmer_ty) = blocktype_to_type(ty) {
-                        let llvm_ty = type_to_llvm(intrinsics, wasmer_ty);
-                        [llvm_ty]
-                            .iter()
-                            .map(|&ty| builder.build_phi(ty, &state.var_name()))
-                            .collect()
-                    } else {
-                        SmallVec::new()
-                    };
+                    let phis = blocktype_to_types(ty, info)
+                        .iter()
+                        .map(|&ty| {
+                            builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name())
+                        })
+                        .collect();
 
                     builder.position_at_end(&current_block);
                     phis
@@ -1423,25 +1422,53 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                 );
 
                 builder.build_conditional_branch(cond_value, &if_then_block, &if_else_block);
+
+                builder.position_at_end(&if_else_block);
+                let else_phis: SmallVec<[PhiValue<'ctx>; 1]> = blocktype_to_param_types(ty, info)
+                    .iter()
+                    .map(|&ty| builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name()))
+                    .collect();
                 builder.position_at_end(&if_then_block);
-                state.push_if(if_then_block, if_else_block, end_block, end_phis);
+                let then_phis: SmallVec<[PhiValue<'ctx>; 1]> = blocktype_to_param_types(ty, info)
+                    .iter()
+                    .map(|&ty| builder.build_phi(type_to_llvm(intrinsics, ty), &state.var_name()))
+                    .collect();
+                for (else_phi, then_phi) in else_phis.iter().rev().zip(then_phis.iter().rev()) {
+                    let (value, info) = state.pop1_extra()?;
+                    let value = apply_pending_canonicalization(builder, intrinsics, value, info);
+                    else_phi.add_incoming(&[(&value, &current_block)]);
+                    then_phi.add_incoming(&[(&value, &current_block)]);
+                }
+                for phi in then_phis.iter() {
+                    state.push1(phi.as_basic_value());
+                }
+
+                state.push_if(
+                    if_then_block,
+                    if_else_block,
+                    end_block,
+                    then_phis,
+                    else_phis,
+                    end_phis,
+                );
             }
             Operator::Else => {
                 if state.reachable {
-                    let frame = state.frame_at_depth(0)?;
+                    let frame = state.frame_at_depth_mut(0)?;
+                    builder.build_unconditional_branch(frame.code_after());
+
+                    // Add phi nodes edges from if_then block to if_end for
+                    // all values that result from that block.
                     let current_block = builder.get_insert_block().ok_or(BinaryReaderError {
                         message: "not currently in a block",
                         offset: -1isize as usize,
                     })?;
-
-                    for phi in frame.phis().to_vec().iter().rev() {
+                    for phi in frame.phis().to_vec().clone().iter().rev() {
                         let (value, info) = state.pop1_extra()?;
                         let value =
                             apply_pending_canonicalization(builder, intrinsics, value, info);
                         phi.add_incoming(&[(&value, &current_block)])
                     }
-                    let frame = state.frame_at_depth(0)?;
-                    builder.build_unconditional_branch(frame.code_after());
                 }
 
                 let (if_else_block, if_else_state) = if let ControlFrame::IfElse {
@@ -1459,6 +1486,13 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
 
                 builder.position_at_end(if_else_block);
                 state.reachable = true;
+
+                if let ControlFrame::IfElse { else_phis, .. } = state.frame_at_depth(0)? {
+                    // Push our own 'else' phi nodes to the stack.
+                    for phi in else_phis.clone().iter() {
+                        state.push1(phi.as_basic_value());
+                    }
+                };
             }
 
             Operator::End => {
@@ -1483,10 +1517,15 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     if_else,
                     next,
                     if_else_state,
+                    else_phis,
                     ..
                 } = &frame
                 {
                     if let IfElseState::If = if_else_state {
+                        for (phi, else_phi) in frame.phis().iter().zip(else_phis.iter()) {
+                            phi.add_incoming(&[(&else_phi.as_basic_value(), &if_else)]);
+                        }
+
                         builder.position_at_end(if_else);
                         builder.build_unconditional_branch(next);
                     }
@@ -1502,21 +1541,20 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     if phi.count_incoming() != 0 {
                         state.push1(phi.as_basic_value());
                     } else {
-                        let basic_ty = phi.as_basic_value().get_type();
-                        let placeholder_value = match basic_ty {
+                        let zero = match phi.as_basic_value().get_type() {
                             BasicTypeEnum::IntType(int_ty) => {
-                                int_ty.const_int(0, false).as_basic_value_enum()
+                                int_ty.const_zero().as_basic_value_enum()
                             }
                             BasicTypeEnum::FloatType(float_ty) => {
-                                float_ty.const_float(0.0).as_basic_value_enum()
+                                float_ty.const_zero().as_basic_value_enum()
                             }
                             _ => {
                                 return Err(CodegenError {
                                     message: "Operator::End phi type unimplemented".to_string(),
-                                });
+                                })
                             }
                         };
-                        state.push1(placeholder_value);
+                        state.push1(zero);
                         phi.as_instruction().erase_from_basic_block();
                     }
                 }
@@ -1528,7 +1566,7 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                 })?;
 
                 let frame = state.outermost_frame()?;
-                for phi in frame.phis().to_vec().iter() {
+                for phi in frame.phis().to_vec().iter().rev() {
                     let (arg, info) = state.pop1_extra()?;
                     let arg = apply_pending_canonicalization(builder, intrinsics, arg, info);
                     phi.add_incoming(&[(&arg, &current_block)]);
@@ -2192,25 +2230,19 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     }
                 }
 
-                match wasmer_fn_sig.returns() {
-                    [] => {}
-                    [_] => {
-                        let value = call_site.try_as_basic_value().left().unwrap();
-                        state.push1(match wasmer_fn_sig.returns()[0] {
-                            Type::F32 => {
-                                builder.build_bitcast(value, intrinsics.f32_ty, "ret_cast")
+                if let Some(basic_value) = call_site.try_as_basic_value().left() {
+                    match wasmer_fn_sig.returns().len() {
+                        1 => state.push1(basic_value),
+                        count @ _ => {
+                            // This is a multi-value return.
+                            let struct_value = basic_value.into_struct_value();
+                            for i in 0..(count as u32) {
+                                let value = builder
+                                    .build_extract_value(struct_value, i, &state.var_name())
+                                    .unwrap();
+                                state.push1(value);
                             }
-                            Type::F64 => {
-                                builder.build_bitcast(value, intrinsics.f64_ty, "ret_cast")
-                            }
-                            _ => value,
-                        });
-                    }
-                    _ => {
-                        return Err(CodegenError {
-                            message: "Operator::CallIndirect multi-value returns unimplemented"
-                                .to_string(),
-                        });
+                        }
                     }
                 }
             }
@@ -8591,10 +8623,32 @@ impl<'ctx> FunctionCodeGenerator<CodegenError> for LLVMFunctionCodeGenerator<'ct
                     "return",
                 )));
             }
-            _ => {
-                return Err(CodegenError {
-                    message: "multi-value returns not yet implemented".to_string(),
-                });
+            results @ _ => {
+                let builder = self.builder.as_ref().unwrap();
+                let intrinsics = self.intrinsics.as_ref().unwrap();
+                let mut struct_value = self
+                    .function
+                    .get_type()
+                    .get_return_type()
+                    .unwrap()
+                    .into_struct_type()
+                    .get_undef();
+                let mut idx = 0;
+                for (value, info) in results {
+                    let one_value =
+                        apply_pending_canonicalization(builder, intrinsics, *value, *info);
+                    let one_value = builder.build_bitcast(
+                        one_value,
+                        type_to_llvm(intrinsics, self.func_sig.returns()[idx]),
+                        "",
+                    );
+                    struct_value = builder
+                        .build_insert_value(struct_value, one_value, idx as u32, "")
+                        .unwrap()
+                        .into_struct_value();
+                    idx = idx + 1;
+                }
+                builder.build_return(Some(&struct_value));
             }
         }
         Ok(())
@@ -8808,7 +8862,6 @@ impl<'ctx> ModuleCodeGenerator<LLVMFunctionCodeGenerator<'ctx>, LLVMBackend, Cod
         let num_params = locals.len();
 
         let local_func_index = self.functions.len();
-
         let code = LLVMFunctionCodeGenerator {
             state,
             context: Some(context),
