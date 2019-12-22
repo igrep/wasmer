@@ -63,19 +63,8 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "clif")]
     fn get_compiler_name() -> &'static str {
-        "clif"
-    }
-
-    #[cfg(feature = "llvm")]
-    fn get_compiler_name() -> &'static str {
-        "llvm"
-    }
-
-    #[cfg(feature = "singlepass")]
-    fn get_compiler_name() -> &'static str {
-        "singlepass"
+        &Backend::default().to_string()
     }
 
     #[cfg(unix)]
@@ -150,7 +139,7 @@ mod tests {
         ) -> Exclude {
             let backend: Option<String> = match backend {
                 "*" => None,
-                "clif" => Some("clif".to_string()),
+                "clif" => Some("cranelift".to_string()),
                 "singlepass" => Some("singlepass".to_string()),
                 "llvm" => Some("llvm".to_string()),
                 _ => panic!("backend {:?} not recognized", backend),
@@ -186,12 +175,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(any(feature = "llvm", feature = "clif", feature = "singlepass")))]
-    fn get_compiler_name() -> &'static str {
-        panic!("compiler not specified, activate a compiler via features");
-        "unknown"
-    }
-
     fn with_instance<F, R>(
         maybe_instance: Option<Arc<Mutex<Instance>>>,
         named_modules: &HashMap<String, Arc<Mutex<Instance>>>,
@@ -222,8 +205,8 @@ mod tests {
         func, imports,
         types::{ElementType, MemoryDescriptor, TableDescriptor},
         units::Pages,
-        CompilerConfig, Ctx, Export, Features, Global, ImportObject, Instance, LikeNamespace,
-        Memory, Table,
+        Backend, CompilerConfig, Ctx, Export, Features, Global, ImportObject, Instance,
+        LikeNamespace, Memory, Table,
     };
 
     fn parse_and_run(
@@ -249,8 +232,8 @@ mod tests {
         let mut features = wabt::Features::new();
         features.enable_simd();
         features.enable_threads();
-        features.enable_sign_extension();
         features.enable_sat_float_to_int();
+        features.enable_sign_extension();
         let mut parser: ScriptParser =
             ScriptParser::from_source_and_name_with_features(&source, filename, features)
                 .expect(&format!("Failed to parse script {}", &filename));
