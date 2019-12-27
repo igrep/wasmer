@@ -20,7 +20,7 @@
     all(target_os = "android", target_arch = "x86_64"),
     all(target_os = "android", target_arch = "aarch64"),
 )))]
-compile_error!("This crate doesn't yet support compiling on operating systems other than FreeBSD, linux and macos and architectures other than x86_64");
+compile_error!("This crate doesn't yet support compiling on operating systems and architectures other than these:\n       - FreeBSD and x86_64\n       - FreeBSD and AArch64\n       - macOS and x86_64\n       - Linux and x86_64\n       - Linux and AArch64\n       - Android and x86_64\n       - Android and AArch64");
 
 extern crate dynasmrt;
 
