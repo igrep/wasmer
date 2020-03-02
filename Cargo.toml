@@ -116,3 +116,6 @@ crate-type = ["bin"]
 [[example]]
 name = "callback"
 crate-type = ["bin"]
+
+[patch.crates-io]
+libc = { git = "https://github.com/rust-lang/libc.git" }
