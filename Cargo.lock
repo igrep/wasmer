@@ -1776,8 +1776,7 @@ dependencies = [
 [[package]]
 name = "wabt-sys"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af5d153dc96aad7dc13ab90835b892c69867948112d95299e522d370c4e13a08"
+source = "git+https://github.com/pepyakin/wabt-rs.git#604574b2af6c3526370bfd846a36d88552bf31e1"
 dependencies = [
  "cc",
  "cmake",

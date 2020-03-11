@@ -119,3 +119,4 @@ crate-type = ["bin"]
 
 [patch.crates-io]
 libc = { git = "https://github.com/rust-lang/libc.git" }
+wabt-sys = { git = "https://github.com/pepyakin/wabt-rs.git" }
