@@ -19,6 +19,7 @@ use crate::{
     types::{FuncIndex, FuncSig, GlobalIndex, LocalOrImport, MemoryIndex, TableIndex, Type, Value},
     vm::{self, InternalField},
 };
+use log::debug;
 use smallvec::{smallvec, SmallVec};
 use std::{
     borrow::Borrow,
@@ -260,6 +261,7 @@ impl Instance {
     /// # }
     /// ```
     pub fn call(&self, name: &str, params: &[Value]) -> CallResult<Vec<Value>> {
+        debug!("Instance::call {}, {:?}", name, params);
         let func: DynFunc = self.exports.get(name)?;
         func.call(params)
     }
@@ -518,10 +520,12 @@ fn call_func_with_index(
         .as_ptr(),
     };
 
+    debug!("call_func_with_index: before get_trampoline");
     let wasm = runnable
         .get_trampoline(info, sig_index)
         .expect("wasm trampoline");
 
+    debug!("call_func_with_index: before call_func_with_index_inner");
     call_func_with_index_inner(ctx_ptr, func_ptr, signature, wasm, args, rets)
 }
 
@@ -586,6 +590,7 @@ pub(crate) fn call_func_with_index_inner(
 
     let run_wasm = |result_space: *mut u64| unsafe {
         let mut error_out = None;
+        debug!("call_func_with_index_inner: before invoking wasm");
 
         let success = invoke(
             trampoline,
@@ -614,6 +619,7 @@ pub(crate) fn call_func_with_index_inner(
         Type::V128 => unreachable!("V128 does not map to any single value"),
     };
 
+    debug!("call_func_with_index_inner: before run_wasm");
     match signature.returns() {
         &[] => {
             run_wasm(ptr::null_mut())?;

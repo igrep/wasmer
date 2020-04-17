@@ -8,6 +8,7 @@ use dynasmrt::aarch64::Assembler;
 #[cfg(target_arch = "x86_64")]
 use dynasmrt::x64::Assembler;
 use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi};
+use log::debug;
 use smallvec::SmallVec;
 use std::{
     any::Any,
@@ -496,10 +497,12 @@ impl RunnableModule for X64ExecutionContext {
     }
 
     fn get_trampoline(&self, _: &ModuleInfo, sig_index: SigIndex) -> Option<Wasm> {
+        debug!("BEGIN X64ExecutionContext::get_trampoline");
         // Correctly unwinding from `catch_unsafe_unwind` on hardware exceptions depends
         // on the signal handlers being installed. Here we call `ensure_sighandler` "statically"
         // outside `invoke()`.
         fault::ensure_sighandler();
+        debug!("      X64ExecutionContext::get_trampoline after fault::ensure_sighandler");
 
         unsafe extern "C" fn invoke(
             _trampoline: Trampoline,
@@ -539,6 +542,7 @@ impl RunnableModule for X64ExecutionContext {
                             callable: NonNull<vm::Func>,
                         }
                         extern "C" fn call_fn(f: *mut u8) -> u64 {
+                            debug!("BEGIN X64ExecutionContext call_fn");
                             unsafe {
                                 let f = &*(f as *const CallCtx);
                                 let callable: extern "C" fn(
@@ -578,6 +582,7 @@ impl RunnableModule for X64ExecutionContext {
                                 )
                                     -> u64 = std::mem::transmute(f.callable);
                                 let mut args = f.args.iter();
+                                debug!("BEFORE X64ExecutionContext callable");
                                 callable(
                                     f.ctx as u64,
                                     args.next().cloned().unwrap_or(0),
@@ -625,6 +630,7 @@ impl RunnableModule for X64ExecutionContext {
                             PROT_WRITE,
                         };
                         const STACK_SIZE: usize = 1048576 * 1024; // 1GB of virtual address space for stack.
+                        debug!("BEFORE X64ExecutionContext allocating stack");
                         let stack_ptr = mmap(
                             ::std::ptr::null_mut(),
                             STACK_SIZE,
@@ -637,11 +643,13 @@ impl RunnableModule for X64ExecutionContext {
                             panic!("unable to allocate stack");
                         }
                         // TODO: Mark specific regions in the stack as PROT_NONE.
+                        debug!("BEFORE X64ExecutionContext SWITCH_STACK");
                         let ret = SWITCH_STACK(
                             (stack_ptr as *mut u8).offset(STACK_SIZE as isize) as *mut u64,
                             call_fn,
                             &mut cctx as *mut CallCtx as *mut u8,
                         );
+                        debug!("BEFORE X64ExecutionContext freeing stack");
                         munmap(stack_ptr, STACK_SIZE);
                         ret
                     }
