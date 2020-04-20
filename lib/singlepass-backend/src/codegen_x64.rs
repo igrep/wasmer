@@ -629,8 +629,7 @@ impl RunnableModule for X64ExecutionContext {
                             mmap, munmap, MAP_ANON, MAP_NORESERVE, MAP_PRIVATE, PROT_READ,
                             PROT_WRITE,
                         };
-                        const STACK_SIZE: usize = 1024; // 1KB of virtual address space for stack.
-                                                        //const STACK_SIZE: usize = 1048576 * 1024; // 1GB of virtual address space for stack.
+                        const STACK_SIZE: usize = 1048576 * 1024; // 1GB of virtual address space for stack.
                         debug!("BEFORE X64ExecutionContext allocating stack");
                         let stack_ptr = mmap(
                             ::std::ptr::null_mut(),
