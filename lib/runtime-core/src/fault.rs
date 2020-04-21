@@ -32,16 +32,15 @@ use crate::state::x64::{build_instance_image, read_stack, X64Register, GPR};
 use crate::state::{CodeVersion, ExecutionStateImage};
 use crate::vm;
 use libc::{mmap, mprotect, siginfo_t, MAP_ANON, MAP_PRIVATE, PROT_NONE, PROT_READ, PROT_WRITE};
-use nix::sys::signal::{
-    sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal, SIGBUS, SIGFPE, SIGILL, SIGINT,
-    SIGSEGV, SIGTRAP,
-};
+use nix::sys::signal::{Signal, SIGBUS, SIGSEGV, SIGTRAP};
 use std::any::Any;
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::c_void;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
+
+const TRAP_STACK_SIZE: usize = 1048576; // 1MB
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) unsafe fn run_on_alternative_stack(stack_end: *mut u64, stack_begin: *mut u64) -> u64 {
@@ -52,8 +51,6 @@ pub(crate) unsafe fn run_on_alternative_stack(stack_end: *mut u64, stack_begin: 
 pub(crate) unsafe fn run_on_alternative_stack(_stack_end: *mut u64, _stack_begin: *mut u64) -> u64 {
     unimplemented!("run_on_alternative_stack");
 }
-
-const TRAP_STACK_SIZE: usize = 1048576; // 1MB
 
 const SETJMP_BUFFER_LEN: usize = 128;
 type SetJmpBuffer = [i32; SETJMP_BUFFER_LEN];
@@ -265,6 +262,7 @@ pub fn allocate_and_run<R, F: FnOnce() -> R>(size: usize, f: F) -> R {
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn signal_trap_handler(
     signum: ::nix::libc::c_int,
     siginfo: *mut siginfo_t,
@@ -428,6 +426,7 @@ extern "C" fn signal_trap_handler(
     }
 }
 
+#[allow(dead_code)]
 extern "C" fn sigint_handler(
     _signum: ::nix::libc::c_int,
     _siginfo: *mut siginfo_t,
@@ -452,23 +451,23 @@ pub fn ensure_sighandler() {
 static INSTALL_SIGHANDLER: Once = Once::new();
 
 unsafe fn install_sighandler() {
-    let sa_trap = SigAction::new(
-        SigHandler::SigAction(signal_trap_handler),
-        SaFlags::SA_ONSTACK,
-        SigSet::empty(),
-    );
-    sigaction(SIGFPE, &sa_trap).unwrap();
-    sigaction(SIGILL, &sa_trap).unwrap();
-    sigaction(SIGSEGV, &sa_trap).unwrap();
-    sigaction(SIGBUS, &sa_trap).unwrap();
-    sigaction(SIGTRAP, &sa_trap).unwrap();
+    //let sa_trap = SigAction::new(
+    //SigHandler::SigAction(signal_trap_handler),
+    //SaFlags::SA_ONSTACK,
+    //SigSet::empty(),
+    //);
+    //sigaction(SIGFPE, &sa_trap).unwrap();
+    //sigaction(SIGILL, &sa_trap).unwrap();
+    //sigaction(SIGSEGV, &sa_trap).unwrap();
+    //sigaction(SIGBUS, &sa_trap).unwrap();
+    //sigaction(SIGTRAP, &sa_trap).unwrap();
 
-    let sa_interrupt = SigAction::new(
-        SigHandler::SigAction(sigint_handler),
-        SaFlags::SA_ONSTACK,
-        SigSet::empty(),
-    );
-    sigaction(SIGINT, &sa_interrupt).unwrap();
+    //let sa_interrupt = SigAction::new(
+    //SigHandler::SigAction(sigint_handler),
+    //SaFlags::SA_ONSTACK,
+    //SigSet::empty(),
+    //);
+    //sigaction(SIGINT, &sa_interrupt).unwrap();
 }
 
 #[derive(Debug, Clone)]

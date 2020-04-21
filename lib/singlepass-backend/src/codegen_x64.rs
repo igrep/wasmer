@@ -501,8 +501,8 @@ impl RunnableModule for X64ExecutionContext {
         // Correctly unwinding from `catch_unsafe_unwind` on hardware exceptions depends
         // on the signal handlers being installed. Here we call `ensure_sighandler` "statically"
         // outside `invoke()`.
-        fault::ensure_sighandler();
-        debug!("      X64ExecutionContext::get_trampoline after fault::ensure_sighandler");
+        //fault::ensure_sighandler();
+        //debug!("      X64ExecutionContext::get_trampoline after fault::ensure_sighandler");
 
         unsafe extern "C" fn invoke(
             _trampoline: Trampoline,
